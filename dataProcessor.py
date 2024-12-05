@@ -39,14 +39,8 @@ def clean_text(text):
         '...' # Ellipsis for trailing thoughts
     )
     
-    # Replace various types of whitespace with a single space
-    text = ' '.join(text.split())
-    
-    # Keep only allowed characters
-    cleaned_text = ''.join(char for char in text if char in allowed_chars)
-    
-    # Remove multiple spaces that might have been created
-    cleaned_text = ' '.join(cleaned_text.split())
+    # Keep only allowed characters and normalize whitespace
+    cleaned_text = ' '.join(''.join(char for char in text if char in allowed_chars).split())
     
     return cleaned_text.strip()
 
@@ -54,14 +48,19 @@ for i, joke in enumerate(jokes):
     if i >= MaxJokesToProcess:
         break
         
-    # Process the joke
+    # Clean and combine title and body
+    title = clean_text(joke['title'])
+    body = clean_text(joke['body'])
+    combined = f"{title} {body}".strip()
+    
+    # Only add separator if there's existing text
     if i > 0:
         combined_text += "   "  # Add separator between entries
-    combined_text += f"{joke['title']} {joke['body']}"
+    combined_text += combined
     
     # Add to processed data
     redditJokesProcessed.append({
-        'text': f"{joke['title']} {joke['body']}",
+        'text': combined,
         'score': joke['score']
     })
     
@@ -75,7 +74,7 @@ print("First joke as sample:", combined_text[:200] + "...")  # Print first 200 c
 # Save processed data to new file
 output_path = os.path.join(os.path.dirname(__file__), 'data', 'redditJokesProcessed.txt')
 with open(output_path, 'w', encoding='utf-8') as f:
-    for joke in redditJokesProcessed:
-        f.write(f"{joke['text']}\n")  # Write each joke text on a new line
+    # Join all joke texts with double spaces and write as a single line
+    f.write('  '.join(joke['text'] for joke in redditJokesProcessed))
 
 print(f"Saved processed data to {output_path}")
