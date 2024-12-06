@@ -8,6 +8,7 @@ def analyze_text_file(file_path):
     
     # Get unique characters
     unique_chars = sorted(set(text))
+    num_unique_chars = len(unique_chars)
     
     # Calculate character frequencies
     char_freq = {}
@@ -19,6 +20,7 @@ def analyze_text_file(file_path):
     
     # Print results
     print(f"Total number of characters: {total_chars}")
+    print(f"Number of unique characters: {num_unique_chars}")
     print("\nUnique characters:")
     print(''.join(unique_chars))
     

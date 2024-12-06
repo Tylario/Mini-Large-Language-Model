@@ -4,17 +4,16 @@ import random
 import json
 
 class MultiOrderMarkovChain:
-    def __init__(self, orders, use_words=True, use_classes=True):
+    def __init__(self, orders, use_classes=True):
         """
         Initialize Markov Chain with multiple orders
         
         Args:
             orders (list): Required list of sequence lengths to consider
-            use_words (bool): Whether to use word-level processing (default: True)
             use_classes (bool): Whether to use character classes (default: True)
         """
         self.orders = orders
-        self.use_words = use_words
+        self.use_words = True
         self.use_classes = use_classes
         self.transitions = {
             order: defaultdict(lambda: defaultdict(float)) 
@@ -192,23 +191,22 @@ if __name__ == "__main__":
     
     # Create model with orders 1-8
     model = MultiOrderMarkovChain(
-        orders=[1, 2, 4, 8, 16, 32, 64, 128],  # All orders from 1-8
-        use_words=True
+        orders=[1, 2, 3, 4, 5, 6, 7, 8],  # Changed to match weights
     )
     model.train(text)
     
     print("\nGenerating with emphasis on short-term patterns:")
     
-    # Weights decrease gradually with order length
+    # Weights for orders 1-8
     weights = {
-        1: 0.1,   # Single word context (high weight for variety)
+        1: 0.1,   # Single word context
         2: 0.2,   # Two word context
         3: 0.1,   # Three word context
-        4: 0.05,   # Four word context
-        5: 0.025,   # Five word context
-        6: 0.0125,   # Six word context
-        7: 0.00625,   # Seven word context (continues decreasing pattern)
-        8: 0.003125   # Eight word context (continues decreasing pattern)
+        4: 0.05,  # Four word context
+        5: 0.025, # Five word context
+        6: 0.0125,# Six word context
+        7: 0.00625,# Seven word context
+        8: 0.003125# Eight word context
     }
     
     print("\nGenerated text:")

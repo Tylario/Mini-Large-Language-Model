@@ -13,17 +13,16 @@ def create_char_mappings(text):
     return char_to_idx, idx_to_char
 
 # Activation functions
-class Tanh:
+class ReLU:
     @staticmethod
     def activation(z):
-        """Hyperbolic tangent activation function"""
-        return np.tanh(z)
+        """ReLU activation function"""
+        return np.maximum(0, z)
     
     @staticmethod
     def derivative(z):
-        """Derivative of tanh activation function"""
-        tanh_z = np.tanh(z)
-        return 1 - tanh_z ** 2
+        """Derivative of ReLU activation function"""
+        return np.where(z > 0, 1, 0)
 
 class Linear:
     @staticmethod
@@ -71,11 +70,11 @@ def forward(X, weights, biases):
     activations = [X_flat]
     Z_values = []
     
-    # Hidden layers with tanh activation
+    # Hidden layers with ReLU activation
     for i in range(len(weights) - 1):
         Z = np.dot(activations[-1], weights[i]) + biases[i]
         Z_values.append(Z)
-        A = Tanh.activation(Z)
+        A = ReLU.activation(Z)
         activations.append(A)
     
     # Output layer with linear activation
@@ -401,7 +400,7 @@ class CharacterPredictor:
                 # Hidden layer gradients
                 for layer in range(len(self.hidden_layers), 0, -1):
                     dA = np.dot(dZ, self.weights[layer].T)
-                    dZ = dA * Tanh.derivative(Z_values[layer-1])
+                    dZ = dA * ReLU.derivative(Z_values[layer-1])
                     
                     if layer > 1:
                         dW = np.dot(activations[layer-1].T, dZ)
@@ -506,6 +505,40 @@ class CharacterPredictor:
         self.velocity_biases = [np.zeros_like(b) for b in self.biases]
         print(f"Weights loaded from {filename}")
 
+    def layer_norm(self, x, epsilon=1e-5):
+        mean = np.mean(x, axis=-1, keepdims=True)
+        variance = np.var(x, axis=-1, keepdims=True)
+        return (x - mean) / np.sqrt(variance + epsilon)
+
+    def softmax(self, x):
+        exp_x = np.exp(x - np.max(x, axis=-1, keepdims=True))  # Subtract max for numerical stability
+        return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+
+    def forward_propagation(self, X):
+        self.activations = [X]
+        
+        for i in range(len(self.weights) - 1):
+            z = np.dot(self.activations[-1], self.weights[i]) + self.biases[i]
+            z_norm = self.layer_norm(z)  # Add normalization
+            self.activations.append(self.activation_fn(z_norm))
+        
+        # Change final layer to use softmax
+        self.final_output = self.softmax(np.dot(self.activations[-1], self.weights[-1]) + self.biases[-1])
+        return self.final_output
+
+    def sample_with_temperature(self, probabilities, temperature=0.8):
+        """
+        Sample from probability distribution with temperature adjustment.
+        - Lower temperature (< 1.0) = More conservative/focused
+        - Higher temperature (> 1.0) = More random/creative
+        """
+        # Adjust probabilities with temperature
+        logits = np.log(probabilities + 1e-10)  # Add small epsilon to avoid log(0)
+        exp_logits = np.exp(logits / temperature)
+        probs = exp_logits / np.sum(exp_logits)
+        
+        return np.random.choice(len(probs), p=probs)
+
 # Main execution
 print("Loading text data...")
 with open('data/redditJokesProcessed.txt', 'r', encoding='utf-8') as f:
@@ -521,7 +554,7 @@ predictor = CharacterPredictor(
     input_size=199,
     hidden_layers=[199, 199, 199, 100],
     output_size=74,
-    alpha=0.005,
+    alpha=0.001,
     epochs=10,
     batch_size=128,
     decay_rate=0.1,
@@ -555,12 +588,12 @@ if not training:
             # Greedy: Always choose most likely character
             next_char_greedy = predictions_greedy[0][0]
             
-            # Weighted random: Sample from top 3 with squared probabilities
-            top_3_chars, top_3_probs = zip(*predictions_weighted[:3])
-            top_3_probs = np.array(top_3_probs)
-            top_3_probs = top_3_probs ** 2
-            top_3_probs = top_3_probs / np.sum(top_3_probs)
-            next_char_weighted = np.random.choice(top_3_chars, p=top_3_probs)
+            # Weighted random: Sample from all chars with squared probabilities
+            chars, probs = zip(*predictions_weighted)
+            probs = np.array(probs)
+            probs = probs ** 2
+            probs = probs / np.sum(probs)
+            next_char_weighted = np.random.choice(chars, p=probs)
             
             generated_text_greedy += next_char_greedy
             generated_text_weighted += next_char_weighted
