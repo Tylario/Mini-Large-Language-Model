@@ -6,7 +6,7 @@ import gc
 
 # Character mapping utilities
 def create_char_mappings(text):
-    """Create character to index and index to character mappings"""
+    """Create character to index and index to character mappings for encoding/decoding text"""
     unique_chars = sorted(set(text))
     char_to_idx = {char: idx for idx, char in enumerate(unique_chars)}
     idx_to_char = {idx: char for idx, char in enumerate(unique_chars)}
@@ -16,41 +16,45 @@ def create_char_mappings(text):
 class Tanh:
     @staticmethod
     def activation(z):
+        """Hyperbolic tangent activation function"""
         return np.tanh(z)
     
     @staticmethod
     def derivative(z):
+        """Derivative of tanh activation function"""
         tanh_z = np.tanh(z)
         return 1 - tanh_z ** 2
 
 class Linear:
     @staticmethod
     def activation(z):
+        """Linear activation function (identity)"""
         return z
     
     @staticmethod
     def derivative(z):
+        """Derivative of linear activation function"""
         return np.ones_like(z)
 
 def init_weights(n_input_features, hidden_layers, output_neurons):
-    """Initialize weights for the neural network with multiple hidden layers"""
+    """Initialize weights and biases for all layers using Xavier initialization"""
     weights = []
     biases = []
     
-    # First layer needs special handling for the flattened input
+    # Input layer weights
     W = np.random.uniform(-0.5, 0.5, size=(n_input_features, hidden_layers[0])) / np.sqrt(n_input_features)
     b = np.zeros((1, hidden_layers[0]))
     weights.append(W)
     biases.append(b)
     
-    # Hidden layers
+    # Hidden layer weights
     for i in range(1, len(hidden_layers)):
         W = np.random.uniform(-0.5, 0.5, size=(hidden_layers[i-1], hidden_layers[i])) / np.sqrt(hidden_layers[i-1])
         b = np.zeros((1, hidden_layers[i]))
         weights.append(W)
         biases.append(b)
     
-    # Output layer
+    # Output layer weights
     W = np.random.uniform(-0.5, 0.5, size=(hidden_layers[-1], output_neurons)) / np.sqrt(hidden_layers[-1])
     b = np.zeros((1, output_neurons))
     weights.append(W)
@@ -59,21 +63,22 @@ def init_weights(n_input_features, hidden_layers, output_neurons):
     return weights, biases
 
 def forward(X, weights, biases):
-    """Forward pass through multiple layers"""
+    """Forward propagation through the network
+    Returns intermediate Z values and activations for backpropagation"""
     batch_size = X.shape[0]
-    X_flat = X.reshape(batch_size, -1)  # Flatten the input
+    X_flat = X.reshape(batch_size, -1)  # Flatten input
     
     activations = [X_flat]
     Z_values = []
     
-    # Through all but the last layer
+    # Hidden layers with tanh activation
     for i in range(len(weights) - 1):
         Z = np.dot(activations[-1], weights[i]) + biases[i]
         Z_values.append(Z)
         A = Tanh.activation(Z)
         activations.append(A)
     
-    # Output layer
+    # Output layer with linear activation
     Z_out = np.dot(activations[-1], weights[-1]) + biases[-1]
     Z_values.append(Z_out)
     A_out = Linear.activation(Z_out)
@@ -82,7 +87,7 @@ def forward(X, weights, biases):
     return Z_values, activations
 
 def clip_gradients(gradients, max_norm=5.0):
-    """Clip gradients to prevent exploding gradients"""
+    """Clip gradients to prevent exploding gradients by scaling if norm exceeds threshold"""
     total_norm = 0
     for grad in gradients:
         total_norm += np.sum(np.square(grad))
@@ -94,9 +99,59 @@ def clip_gradients(gradients, max_norm=5.0):
             gradients[i] = gradients[i] * clip_coef
     return gradients
 
+def sequence_generator(text, batch_size, input_size, char_to_idx):
+    """Generator that yields batches of one-hot encoded sequences and targets
+    Optimized for memory efficiency by processing text directly"""
+    vocab_size = len(char_to_idx)
+    n_sequences = len(text) - input_size
+    
+    # Fast char to index lookup array
+    char_to_idx_arr = np.zeros(256, dtype=np.int32)
+    for char, idx in char_to_idx.items():
+        char_to_idx_arr[ord(char)] = idx
+    
+    indices = np.arange(n_sequences)
+    
+    while True:
+        np.random.shuffle(indices)
+        
+        for i in range(0, n_sequences, batch_size):
+            batch_indices = indices[i:i + batch_size]
+            actual_batch_size = len(batch_indices)
+            
+            X_batch = np.zeros((actual_batch_size, input_size, vocab_size), dtype=np.float32)
+            y_batch = np.zeros((actual_batch_size, vocab_size), dtype=np.float32)
+            
+            for j, idx in enumerate(batch_indices):
+                # Convert sequence to indices efficiently
+                sequence = np.frombuffer(text[idx:idx + input_size].encode(), dtype=np.uint8)
+                sequence_indices = char_to_idx_arr[sequence]
+                
+                # Set one-hot encodings
+                X_batch[j, np.arange(input_size), sequence_indices] = 1
+                
+                # Set target
+                target_idx = char_to_idx_arr[ord(text[idx + input_size])]
+                y_batch[j, target_idx] = 1
+            
+            yield X_batch, y_batch
+
 class CharacterPredictor:
     def __init__(self, input_size=199, hidden_layers=[128, 64], output_size=74, 
-                 alpha=0.01, batch_size=32, epochs=100):
+                 alpha=0.01, batch_size=32, epochs=100, 
+                 decay_rate=0.1, weight_decay=0.0001):
+        """Initialize character prediction neural network
+        
+        Args:
+            input_size: Length of input sequences
+            hidden_layers: List of hidden layer sizes
+            output_size: Size of vocabulary (number of unique characters)
+            alpha: Initial learning rate
+            batch_size: Training batch size
+            epochs: Number of training epochs
+            decay_rate: Learning rate decay factor
+            weight_decay: L2 regularization coefficient
+        """
         self.input_size = input_size
         self.hidden_layers = hidden_layers
         self.output_size = output_size
@@ -104,26 +159,40 @@ class CharacterPredictor:
         self.alpha = alpha
         self.batch_size = batch_size
         self.epochs = epochs
-        self.weight_decay = 0.0001
+        self.decay_rate = decay_rate
+        self.weight_decay = weight_decay
         self.momentum = 0.9
         self.velocity_weights = None
         self.velocity_biases = None
         self.validation_losses = []
         
-        # Initialize weights with the correct input size
-        input_features = input_size * 74  # input_size * vocab_size
+        # Initialize network parameters
+        input_features = input_size * output_size
         self.weights, self.biases = init_weights(
             input_features,
             hidden_layers,
             output_size
         )
         
-        # Initialize velocity arrays for momentum
+        # Initialize momentum arrays
         self.velocity_weights = [np.zeros_like(w) for w in self.weights]
         self.velocity_biases = [np.zeros_like(b) for b in self.biases]
         
     def prepare_sequence(self, text, char_to_idx, training=True):
-        """Prepare input sequences and target outputs using chunked processing"""
+        """Prepare input sequences and targets using memory-efficient chunked processing
+        
+        Processes text in chunks to avoid memory issues with large datasets.
+        Uses temporary files to store intermediate results.
+        
+        Args:
+            text: Input text to process
+            char_to_idx: Character to index mapping
+            training: Whether preparing for training (True) or prediction (False)
+        
+        Returns:
+            X: One-hot encoded input sequences
+            y: One-hot encoded targets (if training=True)
+        """
         print("Preparing sequences...")
         start_time = time.time()
         last_check_time = start_time
@@ -132,16 +201,16 @@ class CharacterPredictor:
         sequences_to_process = len(text) - self.input_size if training else 1
         vocab_size = len(char_to_idx)
         
-        # Process in smaller chunks to manage memory
+        # Process in chunks to manage memory
         chunk_size = 10000
         num_chunks = (sequences_to_process + chunk_size - 1) // chunk_size
         
-        # Create lookup array for faster char to index conversion
+        # Fast char to index lookup
         char_to_idx_arr = np.zeros(256, dtype=np.int32)
         for char, idx in char_to_idx.items():
             char_to_idx_arr[ord(char)] = idx
         
-        # Create temporary directory for chunks
+        # Create temporary storage
         import tempfile
         import os
         temp_dir = tempfile.mkdtemp()
@@ -154,17 +223,14 @@ class CharacterPredictor:
                 chunk_end = min((chunk + 1) * chunk_size, sequences_to_process)
                 chunk_size_actual = chunk_end - chunk_start
                 
-                # Pre-allocate arrays for this chunk
                 X = np.zeros((chunk_size_actual, self.input_size, vocab_size), dtype=np.float32)
                 y = np.zeros((chunk_size_actual, vocab_size), dtype=np.float32) if training else None
                 
-                # Process sequences in this chunk
                 for i in range(chunk_size_actual):
                     if (chunk_start + i) % 10000 == 0:
                         current_time = time.time()
                         sequences_processed = chunk_start + i
                         
-                        # Calculate speed based on last check point
                         time_delta = current_time - last_check_time
                         sequences_delta = sequences_processed - last_check_sequences
                         
@@ -188,19 +254,17 @@ class CharacterPredictor:
                         last_check_time = current_time
                         last_check_sequences = sequences_processed
                     
-                    # Get sequence indices using vectorized operation
                     text_idx = chunk_start + i
                     sequence = np.frombuffer(text[text_idx:text_idx + self.input_size].encode(), dtype=np.uint8)
                     sequence_indices = char_to_idx_arr[sequence]
                     
-                    # Set one-hot encodings
                     X[i, np.arange(self.input_size), sequence_indices] = 1
                     
                     if training:
                         target_idx = char_to_idx_arr[ord(text[text_idx + self.input_size])]
                         y[i, target_idx] = 1
                 
-                # Save chunk to disk
+                # Save chunk
                 x_filename = os.path.join(temp_dir, f'chunk_X_{chunk}.npy')
                 np.save(x_filename, X)
                 chunk_files_X.append(x_filename)
@@ -210,13 +274,12 @@ class CharacterPredictor:
                     np.save(y_filename, y)
                     chunk_files_y.append(y_filename)
                 
-                # Clear memory
                 del X
                 if training:
                     del y
                 gc.collect()
             
-            # Load and concatenate chunks in smaller groups
+            # Combine chunks efficiently
             print("\nCombining chunks...")
             group_size = 5
             final_X = []
@@ -230,7 +293,6 @@ class CharacterPredictor:
                     group_y = [np.load(f) for f in chunk_files_y[i:i+group_size]]
                     final_y.append(np.concatenate(group_y, axis=0))
                 
-                # Clear group memory
                 del group_X
                 if training:
                     del group_y
@@ -240,7 +302,7 @@ class CharacterPredictor:
             y = np.concatenate(final_y, axis=0) if training else None
         
         finally:
-            # Clean up temporary files
+            # Cleanup temporary files
             for f in chunk_files_X + chunk_files_y:
                 try:
                     os.remove(f)
@@ -253,60 +315,90 @@ class CharacterPredictor:
         
         return X, y
     
-    def fit(self, X, y, validation_split=0.1):
-        """Train the network"""
-        print(f"Starting training on {X.shape[0]} samples...")
+    def fit(self, text, char_to_idx, validation_split=0.1):
+        """Train the network using batched sequences
         
-        # More frequent batch progress updates
-        print_interval = max(1, (X.shape[0] // self.batch_size) // 50)  # Print ~50 times per epoch
+        Args:
+            text: Training text
+            char_to_idx: Character to index mapping
+            validation_split: Fraction of data to use for validation
+        """
+        import time
+        start_time = time.time()
+        last_batch_time = start_time
         
-        # Split data into training and validation sets
-        split_idx = int(X.shape[0] * (1 - validation_split))
-        X_train, X_val = X[:split_idx], X[split_idx:]
-        y_train, y_val = y[:split_idx], y[split_idx:]
+        n_sequences = len(text) - self.input_size
+        n_train = int(n_sequences * (1 - validation_split))
         
-        m = X_train.shape[0]
+        train_text = text[:n_train + self.input_size]
+        val_text = text[n_train:]
+        
+        train_gen = sequence_generator(train_text, self.batch_size, self.input_size, char_to_idx)
+        val_gen = sequence_generator(val_text, self.batch_size, self.input_size, char_to_idx)
+        
+        steps_per_epoch = n_train // self.batch_size
+        val_steps = (len(val_text) - self.input_size) // self.batch_size
+        
+        print(f"Starting training with {n_train} training sequences...")
+        print(f"Steps per epoch: {steps_per_epoch}")
         
         for epoch in range(self.epochs):
-            # Learning rate decay
-            self.alpha = self.initial_alpha / (1 + epoch * 0.1)
+            epoch_start_time = time.time()
+            self.alpha = self.initial_alpha / (1 + epoch * self.decay_rate)
             
             epoch_loss = 0
             batch_count = 0
-            current_loss = float('inf')
-            
             print(f"\nEpoch {epoch + 1}/{self.epochs} - Learning Rate: {self.alpha:.6f}")
             
-            # Mini-batch training
-            for i in range(0, m, self.batch_size):
-                batch_X = X_train[i:i + self.batch_size]
-                batch_y = y_train[i:i + self.batch_size]
+            # Training loop
+            for step in range(steps_per_epoch):
+                batch_X, batch_y = next(train_gen)
                 
                 # Forward pass
                 Z_values, activations = forward(batch_X, self.weights, self.biases)
                 
-                # Calculate batch loss before updates
                 batch_loss = np.mean((activations[-1] - batch_y) ** 2)
                 epoch_loss += batch_loss
                 batch_count += 1
-                current_loss = epoch_loss / batch_count
                 
-                if batch_count % print_interval == 0:
-                    progress = (i / m) * 100
-                    print(f"Batch {batch_count}: {progress:.1f}% complete - Current loss: {current_loss:.4f}")
+                if batch_count % 100 == 0:
+                    current_time = time.time()
+                    elapsed_time = current_time - start_time
+                    batch_time = current_time - last_batch_time
+                    last_batch_time = current_time
+                    
+                    progress = step / steps_per_epoch
+                    batches_remaining_epoch = steps_per_epoch - step
+                    time_per_batch = batch_time / 100
+                    
+                    epoch_remaining = batches_remaining_epoch * time_per_batch
+                    epochs_remaining = self.epochs - epoch - progress
+                    total_remaining = epoch_remaining + (epochs_remaining * steps_per_epoch * time_per_batch)
+                    
+                    def format_time(seconds):
+                        hours = int(seconds // 3600)
+                        minutes = int((seconds % 3600) // 60)
+                        return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+                    
+                    current_loss = epoch_loss / batch_count
+                    print(f"Batch {batch_count}: {progress*100:.1f}% complete - "
+                          f"Loss: {current_loss:.4f} - "
+                          f"Elapsed: {format_time(elapsed_time)} - "
+                          f"Epoch remaining: {format_time(epoch_remaining)} - "
+                          f"Total remaining: {format_time(total_remaining)}")
                 
                 # Backward pass
                 dZ = activations[-1] - batch_y
                 dW_list = []
                 db_list = []
                 
-                # Output layer
+                # Output layer gradients
                 dW = np.dot(activations[-2].T, dZ)
                 db = np.sum(dZ, axis=0, keepdims=True)
                 dW_list.insert(0, dW)
                 db_list.insert(0, db)
                 
-                # Hidden layers
+                # Hidden layer gradients
                 for layer in range(len(self.hidden_layers), 0, -1):
                     dA = np.dot(dZ, self.weights[layer].T)
                     dZ = dA * Tanh.derivative(Z_values[layer-1])
@@ -320,16 +412,14 @@ class CharacterPredictor:
                     dW_list.insert(0, dW)
                     db_list.insert(0, db)
                 
-                # Clip gradients
+                # Gradient clipping
                 dW_list = clip_gradients(dW_list)
                 db_list = clip_gradients(db_list)
                 
-                # Update weights and biases with momentum and L2 regularization
+                # Update weights with momentum and L2 regularization
                 for layer in range(len(self.weights)):
-                    # Add L2 regularization gradient
                     dW_list[layer] += self.weight_decay * self.weights[layer]
                     
-                    # Apply momentum
                     self.velocity_weights[layer] = (self.momentum * self.velocity_weights[layer] - 
                                                   self.alpha * dW_list[layer] / self.batch_size)
                     self.velocity_biases[layer] = (self.momentum * self.velocity_biases[layer] - 
@@ -338,37 +428,42 @@ class CharacterPredictor:
                     self.weights[layer] += self.velocity_weights[layer]
                     self.biases[layer] += self.velocity_biases[layer]
             
-            # Calculate validation loss every epoch
-            val_Z_values, val_activations = forward(X_val, self.weights, self.biases)
-            val_loss = np.mean((val_activations[-1] - y_val) ** 2)
-            self.validation_losses.append(val_loss)
+            # Validation
+            val_loss = 0
+            val_batch_count = 0
             
+            for _ in range(val_steps):
+                val_X, val_y = next(val_gen)
+                val_Z_values, val_activations = forward(val_X, self.weights, self.biases)
+                val_loss += np.mean((val_activations[-1] - val_y) ** 2)
+                val_batch_count += 1
+            
+            avg_val_loss = val_loss / val_batch_count
             avg_epoch_loss = epoch_loss / batch_count
-            print(f"Epoch {epoch + 1}/{self.epochs} complete - Train Loss: {avg_epoch_loss:.4f} - Val Loss: {val_loss:.4f}")
+            self.validation_losses.append(avg_val_loss)
+            
+            print(f"Epoch {epoch + 1}/{self.epochs} complete - Train Loss: {avg_epoch_loss:.4f} - Val Loss: {avg_val_loss:.4f}")
     
     def predict(self, text, char_to_idx, idx_to_char):
-        """Make predictions for a text input"""
-        # Take last input_size characters if text is too long
+        """Generate predictions for input text
+        
+        Returns list of (character, probability) pairs for top 5 most likely next characters
+        """
         if len(text) > self.input_size:
             text = text[-self.input_size:]
         
-        # Create one-hot encoding for single sequence
         vocab_size = len(char_to_idx)
         X = np.zeros((1, self.input_size, vocab_size))
         
-        # Fill in one-hot encoding
         for i, char in enumerate(text):
             if char in char_to_idx:
                 X[0, i, char_to_idx[char]] = 1
         
-        # Make prediction
         Z_values, activations = forward(X, self.weights, self.biases)
         
-        # Get indices of top 5 most likely characters
         predictions = activations[-1]
         top_k_indices = np.argsort(predictions[0])[-5:][::-1]
         
-        # Create list of (character, probability) pairs
         char_probs = []
         for idx in top_k_indices:
             char = idx_to_char[idx]
@@ -378,7 +473,7 @@ class CharacterPredictor:
         return char_probs
     
     def save_weights(self, filename='neuralNetworkWeights.json'):
-        """Save weights and biases to a JSON file"""
+        """Save model weights and architecture to JSON file"""
         weights_data = {
             'weights': [w.tolist() for w in self.weights],
             'biases': [b.tolist() for b in self.biases],
@@ -394,27 +489,24 @@ class CharacterPredictor:
         print(f"Weights saved to {filename}")
     
     def load_weights(self, filename='neuralNetworkWeights.json'):
-        """Load weights and biases from a JSON file"""
+        """Load model weights and verify architecture from JSON file"""
         with open(filename, 'r') as f:
             weights_data = json.load(f)
         
-        # Verify architecture matches
         arch = weights_data['architecture']
         if (arch['input_size'] != self.input_size or 
             arch['hidden_layers'] != self.hidden_layers or 
             arch['output_size'] != self.output_size):
             raise ValueError("Model architecture in file doesn't match current model")
         
-        # Convert lists back to numpy arrays
         self.weights = [np.array(w) for w in weights_data['weights']]
         self.biases = [np.array(b) for b in weights_data['biases']]
         
-        # Reinitialize velocity arrays
         self.velocity_weights = [np.zeros_like(w) for w in self.weights]
         self.velocity_biases = [np.zeros_like(b) for b in self.biases]
         print(f"Weights loaded from {filename}")
 
-# Add prints for the main execution
+# Main execution
 print("Loading text data...")
 with open('data/redditJokesProcessed.txt', 'r', encoding='utf-8') as f:
     text = f.read()
@@ -426,15 +518,17 @@ print(f"Found {len(char_to_idx)} unique characters")
 
 print("Initializing predictor...")
 predictor = CharacterPredictor(
-    input_size=199,  
-    hidden_layers=[256, 256, 256],  
+    input_size=199,
+    hidden_layers=[199, 199, 199, 100],
     output_size=74,
-    alpha=0.001, 
-    epochs=5,   
-    batch_size=256  
+    alpha=0.005,
+    epochs=10,
+    batch_size=128,
+    decay_rate=0.1,
+    weight_decay=0.0001
 )
-# Load pre-trained weights or train based on training flag
-training = True  # Set to True to train new model, False to load existing weights
+
+training = False  # Set to True to train new model, False to load existing weights
 
 if not training:
     try:
@@ -448,7 +542,7 @@ if not training:
         print(test_text)
         print("\nGenerating outputs...")
 
-        # Generate text
+        # Generate text using two different sampling methods
         generated_text_greedy = ""
         generated_text_weighted = ""
         current_text_greedy = current_text
@@ -458,10 +552,10 @@ if not training:
             predictions_greedy = predictor.predict(current_text_greedy[-199:], char_to_idx, idx_to_char)
             predictions_weighted = predictor.predict(current_text_weighted[-199:], char_to_idx, idx_to_char)
             
-            # Greedy approach
+            # Greedy: Always choose most likely character
             next_char_greedy = predictions_greedy[0][0]
             
-            # Weighted random approach
+            # Weighted random: Sample from top 3 with squared probabilities
             top_3_chars, top_3_probs = zip(*predictions_weighted[:3])
             top_3_probs = np.array(top_3_probs)
             top_3_probs = top_3_probs ** 2
@@ -473,7 +567,6 @@ if not training:
             current_text_greedy = current_text_greedy + next_char_greedy
             current_text_weighted = current_text_weighted + next_char_weighted
 
-        # Print final outputs only
         print("\nGreedy Output (most likely):")
         print(generated_text_greedy)
         print("\nWeighted Random Output (probability^2 weighted):")
@@ -486,6 +579,5 @@ if not training:
         predictor.save_weights()
 else:
     print("Training new model...")
-    X, y = predictor.prepare_sequence(text, char_to_idx)
-    predictor.fit(X, y)
+    predictor.fit(text, char_to_idx)
     predictor.save_weights()
