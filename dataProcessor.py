@@ -1,14 +1,19 @@
 import json
 import os
+import time
 
 # Load data from reddit_jokes.json
 file_path = os.path.join(os.path.dirname(__file__), 'data', 'reddit_jokes.json')
 with open(file_path, 'r') as file:
     jokes = json.load(file)  # This is a list of joke dictionaries
 
-MaxJokesToProcess = 250
+MaxJokesToProcess = 1000
 redditJokesProcessed = []
-combined_text = ""
+joke_texts = []
+start_time = time.time()
+
+# Initialize a list to store processing times
+processing_times = []
 
 def clean_text(text):
     # First, explicitly replace any newlines or carriage returns with spaces
@@ -48,15 +53,15 @@ for i, joke in enumerate(jokes):
     if i >= MaxJokesToProcess:
         break
         
+    joke_start_time = time.time()
+    
     # Clean and combine title and body
     title = clean_text(joke['title'])
     body = clean_text(joke['body'])
     combined = f"{title} {body}".strip()
     
-    # Only add separator if there's existing text
-    if i > 0:
-        combined_text += "   "  # Add separator between entries
-    combined_text += combined
+    # Instead of concatenating strings, append to list
+    joke_texts.append(combined)
     
     # Add to processed data
     redditJokesProcessed.append({
@@ -64,17 +69,33 @@ for i, joke in enumerate(jokes):
         'score': joke['score']
     })
     
-    # Print progress every 1000 jokes
+    # Record the processing time for this joke
+    processing_times.append(time.time() - joke_start_time)
+    
     if (i + 1) % 1000 == 0:
-        print(f"Processed {i + 1} jokes...")
+        avg_processing_time = sum(processing_times[-1000:]) / 1000
+        remaining_jokes = len(jokes) - (i + 1)
+        remaining_seconds = remaining_jokes * avg_processing_time
+        
+        hours = int(remaining_seconds // 3600)
+        minutes = int((remaining_seconds % 3600) // 60)
+        seconds = int(remaining_seconds % 60)
+        
+        time_str = ""
+        if hours > 0:
+            time_str += f"{hours}h "
+        if minutes > 0:
+            time_str += f"{minutes}m "
+        if seconds > 0:
+            time_str += f"{seconds}s"
+            
+        print(f"Processed {i + 1} of {len(jokes)} jokes... Estimated time left: {time_str}")
 
 print(f"Finished processing {len(redditJokesProcessed)} jokes")
-print("First joke as sample:", combined_text[:200] + "...")  # Print first 200 chars as sample
 
 # Save processed data to new file
 output_path = os.path.join(os.path.dirname(__file__), 'data', 'redditJokesProcessed.txt')
 with open(output_path, 'w', encoding='utf-8') as f:
-    # Join all joke texts with double spaces and write as a single line
-    f.write('  '.join(joke['text'] for joke in redditJokesProcessed))
+    f.write(' '.join(joke_texts))
 
 print(f"Saved processed data to {output_path}")
