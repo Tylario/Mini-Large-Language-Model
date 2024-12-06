@@ -30,31 +30,37 @@ class Linear:
         return np.ones_like(z)
 
 def init_weights(n_input_features, hidden_layers, output_neurons):
-    """Initialize weights for the neural network with multiple hidden layers
-    hidden_layers: list of integers representing neurons in each hidden layer"""
+    """Initialize weights for the neural network with multiple hidden layers"""
     weights = []
     biases = []
     
-    # Input layer to first hidden layer
-    prev_size = n_input_features
-    for layer_size in hidden_layers:
-        W = np.random.uniform(-0.5, 0.5, size=(prev_size, layer_size))
-        b = np.ones((1, layer_size))
+    # First layer needs special handling for the flattened input
+    W = np.random.uniform(-0.5, 0.5, size=(n_input_features, hidden_layers[0])) / np.sqrt(n_input_features)
+    b = np.zeros((1, hidden_layers[0]))
+    weights.append(W)
+    biases.append(b)
+    
+    # Hidden layers
+    for i in range(1, len(hidden_layers)):
+        W = np.random.uniform(-0.5, 0.5, size=(hidden_layers[i-1], hidden_layers[i])) / np.sqrt(hidden_layers[i-1])
+        b = np.zeros((1, hidden_layers[i]))
         weights.append(W)
         biases.append(b)
-        prev_size = layer_size
     
-    # Last hidden layer to output layer
-    W_out = np.random.uniform(-0.5, 0.5, size=(prev_size, output_neurons))
-    b_out = np.ones((1, output_neurons))
-    weights.append(W_out)
-    biases.append(b_out)
+    # Output layer
+    W = np.random.uniform(-0.5, 0.5, size=(hidden_layers[-1], output_neurons)) / np.sqrt(hidden_layers[-1])
+    b = np.zeros((1, output_neurons))
+    weights.append(W)
+    biases.append(b)
     
     return weights, biases
 
 def forward(X, weights, biases):
     """Forward pass through multiple layers"""
-    activations = [X]
+    batch_size = X.shape[0]
+    X_flat = X.reshape(batch_size, -1)  # Flatten the input
+    
+    activations = [X_flat]
     Z_values = []
     
     # Through all but the last layer
@@ -73,18 +79,21 @@ def forward(X, weights, biases):
     return Z_values, activations
 
 class CharacterPredictor:
-    def __init__(self, input_size=199, hidden_layers=[128, 64, 32], output_size=1, 
+    def __init__(self, input_size=199, hidden_layers=[128, 64], output_size=74, 
                  alpha=0.01, batch_size=32, epochs=100):
         self.input_size = input_size
-        self.hidden_layers = hidden_layers  # Now a list of layer sizes
+        self.hidden_layers = hidden_layers
         self.output_size = output_size
         self.alpha = alpha
         self.batch_size = batch_size
         self.epochs = epochs
         
-        # Initialize weights for all layers
+        # Initialize weights with the correct input size
+        input_features = input_size * 74  # input_size * vocab_size
         self.weights, self.biases = init_weights(
-            input_size, hidden_layers, output_size
+            input_features,
+            hidden_layers,
+            output_size
         )
         
     def prepare_sequence(self, text, char_to_idx, training=True):
@@ -93,28 +102,44 @@ class CharacterPredictor:
         X = []
         y = []
         
-        # For prediction, we only need one sequence if text is shorter than input_size
-        if len(text) < self.input_size:
-            if not training:
-                # Pad the text if it's too short
-                text = text.ljust(self.input_size, ' ')
-        
-        # Process sequences
+        vocab_size = len(char_to_idx)
         sequences_to_process = len(text) - self.input_size if training else 1
+        
+        # Add progress tracking
+        update_interval = max(1, sequences_to_process // 20)
+        
         for i in range(sequences_to_process):
+            if i % update_interval == 0:
+                progress = (i / sequences_to_process) * 100
+                print(f"Processing sequences: {progress:.1f}% complete")
+            
             sequence = text[i:i + self.input_size]
-            X_sequence = [char_to_idx.get(char, 0) for char in sequence]  # Use get() with default value
+            
+            # One-hot encode each character in the sequence
+            X_sequence = np.zeros((self.input_size, vocab_size))
+            for j, char in enumerate(sequence):
+                char_idx = char_to_idx.get(char, 0)
+                X_sequence[j, char_idx] = 1
+            
             X.append(X_sequence)
             
             if training:
                 target = text[i + self.input_size]
                 y_target = char_to_idx[target]
-                y_one_hot = np.zeros(len(char_to_idx))
+                y_one_hot = np.zeros(vocab_size)
                 y_one_hot[y_target] = 1
                 y.append(y_one_hot)
         
+        # Convert lists to numpy arrays
+        X = np.array(X)
+        y = np.array(y) if training else None
+        
         print(f"Created {len(X)} sequences")
-        return np.array(X), np.array(y) if training else None
+        print(f"X shape: {X.shape}, X memory: {X.nbytes / 1e9:.2f} GB")
+        if y is not None:
+            print(f"y shape: {y.shape}, y memory: {y.nbytes / 1e9:.2f} GB")
+        
+        return X, y
     
     def fit(self, X, y):
         """Train the network"""
@@ -125,8 +150,18 @@ class CharacterPredictor:
             epoch_loss = 0
             batch_count = 0
             
+            # Add progress tracking for batches
+            total_batches = m // self.batch_size
+            update_interval = max(1, total_batches // 10)
+            
+            print(f"\nEpoch {epoch + 1}/{self.epochs}")
+            
             # Mini-batch training
             for i in range(0, m, self.batch_size):
+                if batch_count % update_interval == 0:
+                    progress = (batch_count / total_batches) * 100
+                    print(f"Batch progress: {progress:.1f}% - Loss: {epoch_loss/(batch_count+1e-10):.4f}")
+                
                 batch_X = X[i:i + self.batch_size]
                 batch_y = y[i:i + self.batch_size]
                 
@@ -134,36 +169,40 @@ class CharacterPredictor:
                 Z_values, activations = forward(batch_X, self.weights, self.biases)
                 
                 # Backward pass
-                dZ = activations[-1] - batch_y  # Error at output layer
+                dZ = activations[-1] - batch_y
                 dW_list = []
                 db_list = []
                 
-                # Handle output layer first
-                dW = (1/m) * np.dot(activations[-2].T, dZ)
-                db = (1/m) * np.sum(dZ, axis=0, keepdims=True)
+                # Output layer
+                dW = np.dot(activations[-2].T, dZ)
+                db = np.sum(dZ, axis=0, keepdims=True)
                 dW_list.insert(0, dW)
                 db_list.insert(0, db)
                 
-                # Handle hidden layers
+                # Hidden layers
                 for layer in range(len(self.hidden_layers), 0, -1):
                     dA = np.dot(dZ, self.weights[layer].T)
                     dZ = dA * Tanh.derivative(Z_values[layer-1])
-                    dW = (1/m) * np.dot(activations[layer-1].T, dZ)
-                    db = (1/m) * np.sum(dZ, axis=0, keepdims=True)
+                    
+                    if layer > 1:
+                        dW = np.dot(activations[layer-1].T, dZ)
+                    else:
+                        dW = np.dot(activations[0].T, dZ)
+                        
+                    db = np.sum(dZ, axis=0, keepdims=True)
                     dW_list.insert(0, dW)
                     db_list.insert(0, db)
-                    
+                
                 # Update weights and biases
                 for layer in range(len(self.weights)):
-                    self.weights[layer] -= self.alpha * dW_list[layer]
-                    self.biases[layer] -= self.alpha * db_list[layer]
+                    self.weights[layer] -= self.alpha * dW_list[layer] / self.batch_size
+                    self.biases[layer] -= self.alpha * db_list[layer] / self.batch_size
                 
                 epoch_loss += np.mean((activations[-1] - batch_y) ** 2)
                 batch_count += 1
             
             avg_epoch_loss = epoch_loss / batch_count
-            if epoch % 10 == 0:
-                print(f"Epoch {epoch}/{self.epochs}, Average Loss: {avg_epoch_loss:.4f}")
+            print(f"Epoch {epoch + 1}/{self.epochs} complete - Average Loss: {avg_epoch_loss:.4f}")
     
     def predict(self, text, char_to_idx, idx_to_char):
         """Make predictions for a text input"""
@@ -197,8 +236,8 @@ print(f"Found {len(char_to_idx)} unique characters")
 print("Initializing predictor...")
 predictor = CharacterPredictor(
     input_size=199,
-    hidden_layers=[128, 64, 32],
-    output_size=len(char_to_idx),
+    hidden_layers=[128, 64],
+    output_size=74,
     alpha=0.01,
     batch_size=32,
     epochs=2
