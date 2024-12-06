@@ -7,7 +7,7 @@ file_path = os.path.join(os.path.dirname(__file__), 'data', 'reddit_jokes.json')
 with open(file_path, 'r') as file:
     jokes = json.load(file)  # This is a list of joke dictionaries
 
-MaxJokesToProcess = 1000
+MaxJokesToProcess = float('inf')  # infinity
 redditJokesProcessed = []
 joke_texts = []
 start_time = time.time()

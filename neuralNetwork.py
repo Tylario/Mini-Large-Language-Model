@@ -427,58 +427,65 @@ print(f"Found {len(char_to_idx)} unique characters")
 print("Initializing predictor...")
 predictor = CharacterPredictor(
     input_size=199,  
-    hidden_layers=[150, 100, 80],  
+    hidden_layers=[256, 256, 256],  
     output_size=74,
-    alpha=0.005, 
-    epochs=1,   
-    batch_size=128  
+    alpha=0.001, 
+    epochs=5,   
+    batch_size=256  
 )
+# Load pre-trained weights or train based on training flag
+training = True  # Set to True to train new model, False to load existing weights
 
-# Load pre-trained weights instead of preparing sequences and training
-try:
-    predictor.load_weights()
-    
-    print("Making predictions...")
-    test_text = "You are a joke teller. You are a joke teller. You are a joke teller. You are a joke teller. You tell jokes, Okay start!!!!: What do you call a redditor that doesn't use the search button in /r/jokes?"
-    current_text = test_text
-    
-    print("\nInput:")
-    print(test_text)
-    print("\nGenerating outputs...")
-
-    # Generate text
-    generated_text_greedy = ""
-    generated_text_weighted = ""
-    current_text_greedy = current_text
-    current_text_weighted = current_text
-
-    for i in range(400):
-        predictions_greedy = predictor.predict(current_text_greedy[-199:], char_to_idx, idx_to_char)
-        predictions_weighted = predictor.predict(current_text_weighted[-199:], char_to_idx, idx_to_char)
+if not training:
+    try:
+        predictor.load_weights()
         
-        # Greedy approach
-        next_char_greedy = predictions_greedy[0][0]
+        print("Making predictions...")
+        test_text = "You are a joke teller. You are a joke teller. You are a joke teller. You are a joke teller. You tell jokes, Okay start!!!!: What do you call a redditor that doesn't use the search button in /r/jokes?"
+        current_text = test_text
         
-        # Weighted random approach
-        top_3_chars, top_3_probs = zip(*predictions_weighted[:3])
-        top_3_probs = np.array(top_3_probs)
-        top_3_probs = top_3_probs ** 2
-        top_3_probs = top_3_probs / np.sum(top_3_probs)
-        next_char_weighted = np.random.choice(top_3_chars, p=top_3_probs)
-        
-        generated_text_greedy += next_char_greedy
-        generated_text_weighted += next_char_weighted
-        current_text_greedy = current_text_greedy + next_char_greedy
-        current_text_weighted = current_text_weighted + next_char_weighted
+        print("\nInput:")
+        print(test_text)
+        print("\nGenerating outputs...")
 
-    # Print final outputs only
-    print("\nGreedy Output (most likely):")
-    print(generated_text_greedy)
-    print("\nWeighted Random Output (probability^2 weighted):")
-    print(generated_text_weighted)
+        # Generate text
+        generated_text_greedy = ""
+        generated_text_weighted = ""
+        current_text_greedy = current_text
+        current_text_weighted = current_text
 
-except FileNotFoundError:
-    print("No pre-trained weights found. Preparing sequences for training...")
+        for i in range(400):
+            predictions_greedy = predictor.predict(current_text_greedy[-199:], char_to_idx, idx_to_char)
+            predictions_weighted = predictor.predict(current_text_weighted[-199:], char_to_idx, idx_to_char)
+            
+            # Greedy approach
+            next_char_greedy = predictions_greedy[0][0]
+            
+            # Weighted random approach
+            top_3_chars, top_3_probs = zip(*predictions_weighted[:3])
+            top_3_probs = np.array(top_3_probs)
+            top_3_probs = top_3_probs ** 2
+            top_3_probs = top_3_probs / np.sum(top_3_probs)
+            next_char_weighted = np.random.choice(top_3_chars, p=top_3_probs)
+            
+            generated_text_greedy += next_char_greedy
+            generated_text_weighted += next_char_weighted
+            current_text_greedy = current_text_greedy + next_char_greedy
+            current_text_weighted = current_text_weighted + next_char_weighted
+
+        # Print final outputs only
+        print("\nGreedy Output (most likely):")
+        print(generated_text_greedy)
+        print("\nWeighted Random Output (probability^2 weighted):")
+        print(generated_text_weighted)
+
+    except FileNotFoundError:
+        print("No pre-trained weights found. Preparing sequences for training...")
+        X, y = predictor.prepare_sequence(text, char_to_idx)
+        predictor.fit(X, y)
+        predictor.save_weights()
+else:
+    print("Training new model...")
     X, y = predictor.prepare_sequence(text, char_to_idx)
     predictor.fit(X, y)
     predictor.save_weights()
