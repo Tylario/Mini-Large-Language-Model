@@ -78,15 +78,34 @@ def forward(X, weights, biases):
     
     return Z_values, activations
 
+def clip_gradients(gradients, max_norm=5.0):
+    """Clip gradients to prevent exploding gradients"""
+    total_norm = 0
+    for grad in gradients:
+        total_norm += np.sum(np.square(grad))
+    total_norm = np.sqrt(total_norm)
+    
+    clip_coef = max_norm / (total_norm + 1e-6)
+    if clip_coef < 1:
+        for i in range(len(gradients)):
+            gradients[i] = gradients[i] * clip_coef
+    return gradients
+
 class CharacterPredictor:
     def __init__(self, input_size=199, hidden_layers=[128, 64], output_size=74, 
                  alpha=0.01, batch_size=32, epochs=100):
         self.input_size = input_size
         self.hidden_layers = hidden_layers
         self.output_size = output_size
+        self.initial_alpha = alpha
         self.alpha = alpha
         self.batch_size = batch_size
         self.epochs = epochs
+        self.weight_decay = 0.0001
+        self.momentum = 0.9
+        self.velocity_weights = None
+        self.velocity_biases = None
+        self.validation_losses = []
         
         # Initialize weights with the correct input size
         input_features = input_size * 74  # input_size * vocab_size
@@ -95,6 +114,10 @@ class CharacterPredictor:
             hidden_layers,
             output_size
         )
+        
+        # Initialize velocity arrays for momentum
+        self.velocity_weights = [np.zeros_like(w) for w in self.weights]
+        self.velocity_biases = [np.zeros_like(b) for b in self.biases]
         
     def prepare_sequence(self, text, char_to_idx, training=True):
         """Prepare input sequences and target outputs"""
@@ -137,32 +160,44 @@ class CharacterPredictor:
         
         return X, y
     
-    def fit(self, X, y):
+    def fit(self, X, y, validation_split=0.1):
         """Train the network"""
         print(f"Starting training on {X.shape[0]} samples...")
-        m = X.shape[0]
+        
+        # Split data into training and validation sets
+        split_idx = int(X.shape[0] * (1 - validation_split))
+        X_train, X_val = X[:split_idx], X[split_idx:]
+        y_train, y_val = y[:split_idx], y[split_idx:]
+        
+        m = X_train.shape[0]
         
         for epoch in range(self.epochs):
+            # Learning rate decay
+            self.alpha = self.initial_alpha / (1 + epoch * 0.1)
+            
             epoch_loss = 0
             batch_count = 0
+            current_loss = float('inf')
             
-            # Add progress tracking for batches
-            total_batches = m // self.batch_size
-            update_interval = max(1, total_batches // 10)
-            
-            print(f"\nEpoch {epoch + 1}/{self.epochs}")
+            print(f"\nEpoch {epoch + 1}/{self.epochs} - Learning Rate: {self.alpha:.6f}")
             
             # Mini-batch training
             for i in range(0, m, self.batch_size):
-                if batch_count % update_interval == 0:
-                    progress = (batch_count / total_batches) * 100
-                    print(f"Batch progress: {progress:.1f}% - Loss: {epoch_loss/(batch_count+1e-10):.4f}")
-                
-                batch_X = X[i:i + self.batch_size]
-                batch_y = y[i:i + self.batch_size]
+                batch_X = X_train[i:i + self.batch_size]
+                batch_y = y_train[i:i + self.batch_size]
                 
                 # Forward pass
                 Z_values, activations = forward(batch_X, self.weights, self.biases)
+                
+                # Calculate batch loss before updates
+                batch_loss = np.mean((activations[-1] - batch_y) ** 2)
+                epoch_loss += batch_loss
+                batch_count += 1
+                current_loss = epoch_loss / batch_count
+                
+                if batch_count % (m // (self.batch_size * 10)) == 0:
+                    progress = (i / m) * 100
+                    print(f"Batch progress: {progress:.1f}% - Loss: {current_loss:.4f}")
                 
                 # Backward pass
                 dZ = activations[-1] - batch_y
@@ -189,16 +224,31 @@ class CharacterPredictor:
                     dW_list.insert(0, dW)
                     db_list.insert(0, db)
                 
-                # Update weights and biases
-                for layer in range(len(self.weights)):
-                    self.weights[layer] -= self.alpha * dW_list[layer] / self.batch_size
-                    self.biases[layer] -= self.alpha * db_list[layer] / self.batch_size
+                # Clip gradients
+                dW_list = clip_gradients(dW_list)
+                db_list = clip_gradients(db_list)
                 
-                epoch_loss += np.mean((activations[-1] - batch_y) ** 2)
-                batch_count += 1
+                # Update weights and biases with momentum and L2 regularization
+                for layer in range(len(self.weights)):
+                    # Add L2 regularization gradient
+                    dW_list[layer] += self.weight_decay * self.weights[layer]
+                    
+                    # Apply momentum
+                    self.velocity_weights[layer] = (self.momentum * self.velocity_weights[layer] - 
+                                                  self.alpha * dW_list[layer] / self.batch_size)
+                    self.velocity_biases[layer] = (self.momentum * self.velocity_biases[layer] - 
+                                                 self.alpha * db_list[layer] / self.batch_size)
+                    
+                    self.weights[layer] += self.velocity_weights[layer]
+                    self.biases[layer] += self.velocity_biases[layer]
+            
+            # Calculate validation loss every epoch
+            val_Z_values, val_activations = forward(X_val, self.weights, self.biases)
+            val_loss = np.mean((val_activations[-1] - y_val) ** 2)
+            self.validation_losses.append(val_loss)
             
             avg_epoch_loss = epoch_loss / batch_count
-            print(f"Epoch {epoch + 1}/{self.epochs} complete - Average Loss: {avg_epoch_loss:.4f}")
+            print(f"Epoch {epoch + 1}/{self.epochs} complete - Train Loss: {avg_epoch_loss:.4f} - Val Loss: {val_loss:.4f}")
     
     def predict(self, text, char_to_idx, idx_to_char):
         """Make predictions for a text input"""
@@ -253,26 +303,42 @@ generated_text = ""
 print("\nInput:")
 print(test_text)
 
-print("\nGenerating output...")
-# Generate 100 characters
+print("\nGenerating outputs...")
+# Generate 100 characters for each method
+generated_text_greedy = ""
+generated_text_weighted = ""
+current_text_greedy = current_text
+current_text_weighted = current_text
+
 for i in range(100):
-    predictions = predictor.predict(current_text[-75:], char_to_idx, idx_to_char)
+    # Get predictions for greedy approach
+    predictions_greedy = predictor.predict(current_text_greedy[-75:], char_to_idx, idx_to_char)
+    # Get predictions for weighted random approach 
+    predictions_weighted = predictor.predict(current_text_weighted[-75:], char_to_idx, idx_to_char)
     
     # Debug: Print top 5 predictions for first few iterations
-    if i < 5:
+    if i < 3:
         print(f"\nDebug - Top 5 predictions for position {i}:")
-        for char, prob in predictions[:5]:
+        for char, prob in predictions_greedy[:5]:
             print(f"'{char}': {prob:.4f}")
     
-    # Choose randomly from top 3 predictions based on their probabilities
-    top_3_chars, top_3_probs = zip(*predictions[:3])
-    # Normalize probabilities
-    top_3_probs = np.array(top_3_probs)
-    top_3_probs = top_3_probs / np.sum(top_3_probs)
-    next_char = np.random.choice(top_3_chars, p=top_3_probs)
+    # Greedy approach - take most likely character
+    next_char_greedy = predictions_greedy[0][0]
     
-    generated_text += next_char
-    current_text = current_text + next_char
+    # Weighted random approach - square probabilities and normalize
+    top_3_chars, top_3_probs = zip(*predictions_weighted[:3])
+    top_3_probs = np.array(top_3_probs)
+    top_3_probs = top_3_probs ** 2  # Square the probabilities
+    top_3_probs = top_3_probs / np.sum(top_3_probs)  # Normalize
+    next_char_weighted = np.random.choice(top_3_chars, p=top_3_probs)
+    
+    # Add characters to outputs
+    generated_text_greedy += next_char_greedy
+    generated_text_weighted += next_char_weighted
+    current_text_greedy = current_text_greedy + next_char_greedy
+    current_text_weighted = current_text_weighted + next_char_weighted
 
-print("\nOutput:")
-print(generated_text)
+print("\nGreedy Output (most likely):")
+print(generated_text_greedy)
+print("\nWeighted Random Output (probability^2 weighted):")
+print(generated_text_weighted)
