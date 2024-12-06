@@ -98,7 +98,6 @@ class CharacterPredictor:
         
     def prepare_sequence(self, text, char_to_idx, training=True):
         """Prepare input sequences and target outputs"""
-        print(f"Preparing sequences from text of length {len(text)}...")
         X = []
         y = []
         
@@ -111,7 +110,6 @@ class CharacterPredictor:
         for i in range(sequences_to_process):
             if i % update_interval == 0:
                 progress = (i / sequences_to_process) * 100
-                print(f"Processing sequences: {progress:.1f}% complete")
             
             sequence = text[i:i + self.input_size]
             
@@ -134,8 +132,6 @@ class CharacterPredictor:
         X = np.array(X)
         y = np.array(y) if training else None
         
-        print(f"Created {len(X)} sequences")
-        print(f"X shape: {X.shape}, X memory: {X.nbytes / 1e9:.2f} GB")
         if y is not None:
             print(f"y shape: {y.shape}, y memory: {y.nbytes / 1e9:.2f} GB")
         
@@ -235,12 +231,12 @@ print(f"Found {len(char_to_idx)} unique characters")
 
 print("Initializing predictor...")
 predictor = CharacterPredictor(
-    input_size=199,
+    input_size=75,
     hidden_layers=[128, 64],
     output_size=74,
     alpha=0.01,
     batch_size=32,
-    epochs=2
+    epochs=1
 )
 
 # Prepare sequences
@@ -251,7 +247,32 @@ predictor.fit(X, y)
 
 print("Making predictions...")
 test_text = "What do you call a redditor that doesn't use the search button in /r/jokes?"
-predictions = predictor.predict(test_text, char_to_idx, idx_to_char)
-print("\nTop 5 predicted next characters:")
-for char, prob in predictions:
-    print(f"'{char}': {prob:.4f}")
+current_text = test_text
+generated_text = ""
+
+print("\nInput:")
+print(test_text)
+
+print("\nGenerating output...")
+# Generate 100 characters
+for i in range(100):
+    predictions = predictor.predict(current_text[-75:], char_to_idx, idx_to_char)
+    
+    # Debug: Print top 5 predictions for first few iterations
+    if i < 5:
+        print(f"\nDebug - Top 5 predictions for position {i}:")
+        for char, prob in predictions[:5]:
+            print(f"'{char}': {prob:.4f}")
+    
+    # Choose randomly from top 3 predictions based on their probabilities
+    top_3_chars, top_3_probs = zip(*predictions[:3])
+    # Normalize probabilities
+    top_3_probs = np.array(top_3_probs)
+    top_3_probs = top_3_probs / np.sum(top_3_probs)
+    next_char = np.random.choice(top_3_chars, p=top_3_probs)
+    
+    generated_text += next_char
+    current_text = current_text + next_char
+
+print("\nOutput:")
+print(generated_text)
