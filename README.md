@@ -98,14 +98,14 @@ predictor = CharacterPredictor(
  their length:**
 ```python
 weights = {
-    1: 0.1,         # Single word context
-    2: 0.2,         # Two word context
-    3: 0.1,         # Three word context
-    4: 0.05,       # Four word context
-    5: 0.025,     # Five word context
-    6: 0.0125,   # Six word context
+    1: 0.2,     # Single word context
+    2: 0.2,     # Two word context
+    3: 0.1,     # Three word context
+    4: 0.05,    # Four word context
+    5: 0.025,   # Five word context
+    6: 0.0125,  # Six word context
     7: 0.00625, # Seven word context
-    8: 0.003125# Eight word context
+    8: 0.003125 # Eight word context
 }
 ```
 
