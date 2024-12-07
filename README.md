@@ -87,7 +87,7 @@ predictor = CharacterPredictor(
 | 4400  | 0.0126 |
 
 **These are the results when choosing the next character based on the highest probability:**
->            
+>                
 >                
 
 **These are the results when choosing the next character randomly based on weighted probability:**
