@@ -143,6 +143,3 @@ This project was completed using the r/Jokes dataset as the sole data source. Al
 
 ## Source Code
 [GitHub Repository](https://github.com/Tylario/Mini-Large-Language-Model)
-```
-
-This README is now ready to be copied into a README.md file for your GitHub project repository. It includes every detail from your initial content and is formatted using Markdown for clear presentation on GitHub.
